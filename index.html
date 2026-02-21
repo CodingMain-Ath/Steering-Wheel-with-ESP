@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Steering Wheel Controller - Master Guide</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Base Styles & Custom Scrollbar */
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Chart Container Strict Requirements */
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 350px;
+            max-height: 400px;
+        }
+
+        /* Page Transitions */
+        .page-section {
+            display: none;
+            animation: fadeIn 0.4s ease-in-out;
+        }
+        .page-section.active {
+            display: block;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Interactive Wiring Highlights */
+        .pin-hover-target:hover ~ .wire-path, 
+        .wire-path.active {
+            border-color: #4f46e5 !important;
+            background-color: #e0e7ff !important;
+            color: #4f46e5 !important;
+            font-weight: bold;
+        }
+
+        /* Wheel Canvas Styling */
+        #wheelCanvas {
+            border-radius: 50%;
+            background: radial-gradient(circle, #f8fafc 0%, #e2e8f0 100%);
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.1), 0 10px 15px -3px rgba(0,0,0,0.1);
+        }
+    </style>
+
+    <!-- Chosen Palette: Slate (Backgrounds/Text) + Indigo (Primary Theme/Nav) + Emerald (Code/Success) + Rose (Alerts/Noise) -->
+    <!-- Application Structure Plan: 
+         A multi-view Single Page Application (SPA).
+         1. Top Navigation: Allows switching between logical modules of the project.
+         2. Overview View: System architecture and block diagram.
+         3. Hardware & Wiring View: BOM and an interactive "pin-to-pin" wiring visualizer to prevent incorrect connections.
+         4. Physics & Math View: A live, real-time simulation using Canvas (drawing a steering wheel) and Chart.js (plotting raw vs filtered data). Users control the wheel via a slider and see how the math (Complementary Filter) cleans the signal.
+         5. Software & Code View: Complete, annotated copy-pasteable code, plus library setup instructions.
+         6. Calibration View: Interactive deadzone simulator.
+         Why this structure? It takes the user chronologically from concept -> buying parts -> wiring -> understanding the math -> uploading code -> fine-tuning.
+    -->
+    <!-- Visualization & Content Choices:
+         - Navigation: JS-driven class toggling (SPA routing).
+         - Wiring: HTML/CSS flexbox grid with hover states (No SVG). Goal: Safe hardware assembly.
+         - Wheel Simulation: HTML5 Canvas Context 2D. Goal: Visual representation of physical input. Justification: Fast, dynamic rotation rendering without SVG overhead.
+         - Live Data Plotting: Chart.js Line Chart with a rolling data buffer. Goal: Teach the Complementary Filter visually.
+         - Code Blocks: Pre/code tags with Tailwind styling. Goal: Easy implementation.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <!-- Top Navigation -->
+    <nav class="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-steering-wheel text-2xl text-indigo-400"></i>
+                    <span class="font-bold text-xl tracking-tight">ESP32 Wheel Setup</span>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links">
+                        <button onclick="nav('overview')" class="nav-btn bg-indigo-800 text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-target="overview">Overview</button>
+                        <button onclick="nav('hardware')" class="nav-btn text-indigo-200 hover:bg-indigo-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-target="hardware">Hardware & Wiring</button>
+                        <button onclick="nav('physics')" class="nav-btn text-indigo-200 hover:bg-indigo-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-target="physics">Physics Simulator</button>
+                        <button onclick="nav('software')" class="nav-btn text-indigo-200 hover:bg-indigo-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-target="software">Software & Code</button>
+                        <button onclick="nav('calibration')" class="nav-btn text-indigo-200 hover:bg-indigo-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-target="calibration">Calibration</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+
+        <!-- ========================================== -->
+        <!-- VIEW 1: OVERVIEW                           -->
+        <!-- ========================================== -->
+        <section id="view-overview" class="page-section active space-y-8">
+            <div class="text-center space-y-4 py-8">
+                <h1 class="text-4xl md:text-5xl font-extrabold text-slate-900">DIY Bluetooth Steering Wheel</h1>
+                <p class="text-xl text-slate-600 max-w-3xl mx-auto">Build a low-latency, wireless racing controller using an ESP32 microcontroller and an MPU6050 gyroscope sensor. Perfect for games like Assetto Corsa, F1, and Euro Truck Simulator.</p>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+                <h2 class="text-2xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">How It Works (Architecture)</h2>
+                
+                <div class="flex flex-col md:flex-row items-stretch justify-center gap-6 text-center">
+                    <div class="flex-1 bg-slate-50 p-6 rounded-xl border-2 border-slate-200">
+                        <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                            <i class="fas fa-arrows-rotate"></i>
+                        </div>
+                        <h3 class="font-bold text-lg">1. Physical Input</h3>
+                        <p class="text-sm text-slate-600 mt-2">You mount the MPU6050 behind a steering wheel. As you rotate the wheel, gravity shifts relative to the sensor.</p>
+                    </div>
+                    
+                    <div class="hidden md:flex items-center text-slate-400 text-2xl"><i class="fas fa-arrow-right"></i></div>
+                    
+                    <div class="flex-1 bg-slate-50 p-6 rounded-xl border-2 border-slate-200">
+                        <div class="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                            <i class="fas fa-microchip"></i>
+                        </div>
+                        <h3 class="font-bold text-lg">2. ESP32 Processing</h3>
+                        <p class="text-sm text-slate-600 mt-2">The ESP32 reads raw I2C data, applies mathematical filters to remove hand jitter, and calculates the exact angle.</p>
+                    </div>
+
+                    <div class="hidden md:flex items-center text-slate-400 text-2xl"><i class="fas fa-arrow-right"></i></div>
+
+                    <div class="flex-1 bg-slate-50 p-6 rounded-xl border-2 border-slate-200">
+                        <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                            <i class="fab fa-bluetooth-b"></i>
+                        </div>
+                        <h3 class="font-bold text-lg">3. BLE HID Output</h3>
+                        <p class="text-sm text-slate-600 mt-2">The angle is transmitted over Bluetooth. Your PC sees it as a standard plug-and-play Gamepad joystick. No drivers required.</p>
+                    </div>
+                </div>
+                
+                <div class="mt-8 text-center">
+                    <button onclick="nav('hardware')" class="bg-indigo-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-indigo-700 shadow-lg transition-transform hover:-translate-y-1">Start Building &rarr;</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 2: HARDWARE & WIRING                  -->
+        <!-- ========================================== -->
+        <section id="view-hardware" class="page-section space-y-8">
+            <h2 class="text-3xl font-bold text-slate-900">Hardware & Wiring Guide</h2>
+            <p class="text-slate-600 text-lg">Hover over the connections below to see exactly how to wire your controller. Incorrect wiring can fry your sensor.</p>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Interactive Wiring Diagram -->
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                    <h3 class="text-xl font-bold text-slate-800 mb-4 border-b pb-2">Interactive Connection Map</h3>
+                    <p class="text-sm text-slate-500 mb-6"><i class="fas fa-info-circle"></i> Hover over any row to highlight the physical connection.</p>
+                    
+                    <div class="flex justify-between items-center bg-slate-800 text-white rounded-t-lg p-3 font-mono text-sm">
+                        <div class="w-1/3 text-center">ESP32 Pins</div>
+                        <div class="w-1/3 text-center">Wire</div>
+                        <div class="w-1/3 text-center">MPU6050 Pins</div>
+                    </div>
+                    
+                    <div class="flex flex-col border border-slate-200 border-t-0 rounded-b-lg overflow-hidden">
+                        <!-- Power (3.3V) -->
+                        <div class="flex justify-between items-center p-3 border-b border-slate-100 hover:bg-red-50 transition-colors cursor-pointer group" onmouseover="showPinInfo('power')" onmouseout="showPinInfo('default')">
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-red-600">3V3</div>
+                            <div class="w-1/3 text-center text-red-500"><i class="fas fa-minus w-full"></i></div>
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-red-600">VCC</div>
+                        </div>
+                        
+                        <!-- Ground -->
+                        <div class="flex justify-between items-center p-3 border-b border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer group" onmouseover="showPinInfo('gnd')" onmouseout="showPinInfo('default')">
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-black">GND</div>
+                            <div class="w-1/3 text-center text-slate-800"><i class="fas fa-minus w-full"></i></div>
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-black">GND</div>
+                        </div>
+
+                        <!-- I2C SDA -->
+                        <div class="flex justify-between items-center p-3 border-b border-slate-100 hover:bg-blue-50 transition-colors cursor-pointer group" onmouseover="showPinInfo('sda')" onmouseout="showPinInfo('default')">
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-blue-600">D21 (GPIO 21)</div>
+                            <div class="w-1/3 text-center text-blue-500"><i class="fas fa-minus w-full"></i></div>
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-blue-600">SDA</div>
+                        </div>
+
+                        <!-- I2C SCL -->
+                        <div class="flex justify-between items-center p-3 hover:bg-green-50 transition-colors cursor-pointer group" onmouseover="showPinInfo('scl')" onmouseout="showPinInfo('default')">
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-green-600">D22 (GPIO 22)</div>
+                            <div class="w-1/3 text-center text-green-500"><i class="fas fa-minus w-full"></i></div>
+                            <div class="w-1/3 text-center font-bold text-slate-700 group-hover:text-green-600">SCL</div>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Pin Info Box -->
+                    <div id="pin-info-box" class="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-lg min-h-[100px] flex items-center justify-center text-center">
+                        <span class="text-slate-500 italic">Hover over a connection above to see details.</span>
+                    </div>
+                </div>
+
+                <!-- Shopping List -->
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                    <h3 class="text-xl font-bold text-slate-800 mb-4 border-b pb-2">Bill of Materials</h3>
+                    <ul class="space-y-4">
+                        <li class="flex items-start gap-3">
+                            <div class="bg-indigo-100 p-2 rounded text-indigo-700"><i class="fas fa-microchip"></i></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">ESP32 Development Board</h4>
+                                <p class="text-sm text-slate-600">Ensure it has built-in Bluetooth (most do). A NodeMCU ESP-WROOM-32 is perfect.</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <div class="bg-indigo-100 p-2 rounded text-indigo-700"><i class="fas fa-compass"></i></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">MPU-6050 Module</h4>
+                                <p class="text-sm text-slate-600">A cheap 6-axis IMU (Gyro + Accelerometer). Often comes with pre-soldered headers.</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <div class="bg-indigo-100 p-2 rounded text-indigo-700"><i class="fas fa-network-wired"></i></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">4x Jumper Wires</h4>
+                                <p class="text-sm text-slate-600">Female-to-Female wires to connect the ESP32 pins to the sensor pins directly.</p>
+                            </div>
+                        </li>
+                         <li class="flex items-start gap-3">
+                            <div class="bg-indigo-100 p-2 rounded text-indigo-700"><i class="fas fa-plug"></i></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">Power Source</h4>
+                                <p class="text-sm text-slate-600">A Micro-USB/USB-C cable connected to your PC, or a small USB power bank mounted to the wheel.</p>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 3: PHYSICS & MATH SIMULATOR           -->
+        <!-- ========================================== -->
+        <section id="view-physics" class="page-section space-y-6">
+            <div>
+                <h2 class="text-3xl font-bold text-slate-900">Sensor Physics & Math Simulator</h2>
+                <p class="text-slate-600 text-lg mt-2">Why do we need complex code? Because physics is messy. Play with the wheel below to see how raw sensor data is filtered into usable game input.</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- Interactive Controls & Wheel -->
+                <div class="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col items-center">
+                    <h3 class="font-bold text-slate-800 mb-4 w-full text-left">1. Physical Input</h3>
+                    
+                    <!-- HTML5 Canvas for the Wheel -->
+                    <div class="relative w-48 h-48 mb-6">
+                        <canvas id="wheelCanvas" width="192" height="192" class="absolute top-0 left-0"></canvas>
+                        <div class="absolute inset-0 flex items-center justify-center font-bold text-slate-700 bg-white/50 rounded-full" style="clip-path: circle(20%); pointer-events: none;">
+                            <span id="wheelAngleDisplay">0°</span>
+                        </div>
+                    </div>
+
+                    <label class="w-full text-sm font-bold text-slate-700 mb-2">Turn the Steering Wheel:</label>
+                    <input type="range" id="wheelInput" min="-90" max="90" value="0" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600">
+                    <div class="flex justify-between w-full text-xs text-slate-500 mt-2">
+                        <span>-90° (Left)</span>
+                        <span>0° (Center)</span>
+                        <span>+90° (Right)</span>
+                    </div>
+
+                    <div class="w-full mt-8 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                        <label class="w-full text-sm font-bold text-slate-700 mb-1 flex justify-between">
+                            <span>Filter Alpha (α)</span>
+                            <span id="alphaDisplay">0.96</span>
+                        </label>
+                        <input type="range" id="alphaInput" min="0.5" max="0.99" step="0.01" value="0.96" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        <p class="text-xs text-slate-500 mt-2">High α = Smoother but slower. Low α = Fast but jittery.</p>
+                    </div>
+                </div>
+
+                <!-- Live Data Chart -->
+                <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold text-slate-800">2. Real-Time Signal Processing (Complementary Filter)</h3>
+                        <div class="flex gap-2 text-xs">
+                            <span class="px-2 py-1 bg-red-100 text-red-700 rounded"><i class="fas fa-circle text-[8px] mr-1"></i>Accel (Noisy)</span>
+                            <span class="px-2 py-1 bg-blue-100 text-blue-700 rounded"><i class="fas fa-circle text-[8px] mr-1"></i>Gyro (Drifts)</span>
+                            <span class="px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-bold"><i class="fas fa-circle text-[8px] mr-1"></i>Filtered Output</span>
+                        </div>
+                    </div>
+                    
+                    <div class="chart-container border border-slate-100 rounded bg-slate-50 p-2">
+                        <canvas id="liveChart"></canvas>
+                    </div>
+
+                    <div class="mt-4 p-4 bg-indigo-50 border-l-4 border-indigo-500 text-sm text-indigo-900 rounded">
+                        <strong>The Math inside the ESP32:</strong><br>
+                        <code>Angle = (α * (Angle + Gyro_Rate * Time_Step)) + ((1 - α) * Accel_Angle)</code><br>
+                        This combines the short-term speed of the Gyroscope with the long-term stability of the Accelerometer (Gravity).
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 4: SOFTWARE & CODE                    -->
+        <!-- ========================================== -->
+        <section id="view-software" class="page-section space-y-6">
+            <h2 class="text-3xl font-bold text-slate-900">Software & Firmware</h2>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Setup Instructions -->
+                <div class="lg:col-span-1 space-y-4">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                        <h3 class="font-bold text-slate-800 border-b pb-2 mb-3">1. IDE Setup</h3>
+                        <ol class="list-decimal list-inside text-sm text-slate-600 space-y-2">
+                            <li>Download <a href="#" class="text-indigo-600 hover:underline">Arduino IDE</a>.</li>
+                            <li>Go to File > Preferences. Add ESP32 JSON URL.</li>
+                            <li>Go to Tools > Board > Boards Manager. Search & Install "esp32".</li>
+                            <li>Select "DOIT ESP32 DEVKIT V1" from the boards menu.</li>
+                        </ol>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                        <h3 class="font-bold text-slate-800 border-b pb-2 mb-3">2. Required Libraries</h3>
+                        <p class="text-sm text-slate-600 mb-2">Install these via Sketch > Include Library > Manage Libraries:</p>
+                        <ul class="list-disc list-inside text-sm text-slate-600 space-y-1 font-mono">
+                            <li>Adafruit MPU6050</li>
+                            <li>Adafruit Unified Sensor</li>
+                        </ul>
+                        <p class="text-sm text-slate-600 mt-4 mb-2">Install manually (Download ZIP from GitHub):</p>
+                        <ul class="list-disc list-inside text-sm text-slate-600 space-y-1 font-mono">
+                            <li>ESP32-BLE-Gamepad</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Code Block -->
+                <div class="lg:col-span-2 bg-slate-900 rounded-xl shadow-sm border border-slate-700 overflow-hidden flex flex-col">
+                    <div class="bg-slate-800 px-4 py-2 flex justify-between items-center border-b border-slate-700">
+                        <span class="text-slate-300 font-mono text-sm">steering_wheel.ino</span>
+                        <button onclick="copyCode()" class="text-slate-400 hover:text-white transition-colors text-sm">
+                            <i class="fas fa-copy mr-1"></i> Copy
+                        </button>
+                    </div>
+                    <div class="p-4 overflow-y-auto max-h-[500px] custom-scroll relative text-sm">
+<pre><code class="language-cpp text-slate-300">#include &lt;BleGamepad.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;Adafruit_MPU6050.h&gt;
+#include &lt;Adafruit_Sensor.h&gt;
+
+BleGamepad bleGamepad("ESP32 Wheel", "DIY Setup", 100);
+Adafruit_MPU6050 mpu;
+
+// Filter Variables
+float angle = 0;
+float alpha = 0.96; 
+unsigned long lastTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize BLE Gamepad
+  bleGamepad.begin();
+  
+  // Initialize MPU6050
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050");
+    while (1) delay(10);
+  }
+  
+  // Configure MPU ranges
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  
+  lastTime = millis();
+}
+
+void loop() {
+  if (bleGamepad.isConnected()) {
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+
+    // Calculate time elapsed
+    unsigned long currentTime = millis();
+    float dt = (currentTime - lastTime) / 1000.0;
+    lastTime = currentTime;
+
+    // 1. Accelerometer Angle (Roll)
+    // atan2 gives radians, multiply by 57.2958 to get degrees
+    float accelAngle = atan2(a.acceleration.y, a.acceleration.z) * 57.2958;
+
+    // 2. Gyro Rate (X-axis rotation speed)
+    float gyroRate = g.gyro.x * 57.2958;
+
+    // 3. Complementary Filter
+    angle = alpha * (angle + gyroRate * dt) + (1.0 - alpha) * accelAngle;
+
+    // 4. Map Angle (-90 to +90) to Gamepad Axis (-32767 to 32767)
+    // Constrain to prevent overflow if turned past 90 degrees
+    float constrainedAngle = constrain(angle, -90, 90);
+    int mappedAxis = map(constrainedAngle, -90, 90, -32767, 32767);
+
+    // 5. Send to PC (X axis, Y, Z, rZ, rX, rY)
+    bleGamepad.setAxes(mappedAxis, 0, 0, 0, 0, 0);
+    
+    // Optional: Add button logic here
+    // if(digitalRead(BUTTON_PIN) == LOW) bleGamepad.press(BUTTON_1);
+  }
+  
+  delay(10); // Run loop at ~100Hz
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 5: CALIBRATION                        -->
+        <!-- ========================================== -->
+        <section id="view-calibration" class="page-section space-y-6">
+            <h2 class="text-3xl font-bold text-slate-900">Calibration & Deadzones</h2>
+            
+            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center max-w-3xl mx-auto">
+                <p class="text-slate-600 mb-6 text-left">When you hold a wheel straight, your hands naturally tremble slightly. If we send this raw tremble to the game, the car will drive erratically on straightaways. We fix this by coding a <strong>Deadzone</strong>—a range near zero where input is ignored.</p>
+                
+                <div class="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                    <h3 class="font-bold text-slate-800 mb-4">Deadzone Simulator</h3>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-bold text-slate-700 mb-1">Set Deadzone Size (Ignore inputs between -X and +X)</label>
+                        <input type="range" id="deadzoneInput" min="0" max="30" value="5" class="w-full accent-indigo-600">
+                        <span id="dzVal" class="text-xs font-mono text-indigo-600">±5 degrees</span>
+                    </div>
+
+                    <div class="mb-8">
+                        <label class="block text-sm font-bold text-slate-700 mb-1">Physical Wheel Angle</label>
+                        <input type="range" id="calibWheelInput" min="-90" max="90" value="0" class="w-full accent-slate-500">
+                        <span id="calibWheelVal" class="text-xs font-mono text-slate-600">0 degrees</span>
+                    </div>
+
+                    <div class="relative w-full h-12 bg-slate-200 rounded-full overflow-hidden border border-slate-300">
+                        <!-- Center Line -->
+                        <div class="absolute left-1/2 top-0 bottom-0 w-0.5 bg-slate-400 z-10 transform -translate-x-1/2"></div>
+                        
+                        <!-- Deadzone Visual Indicator -->
+                        <div id="dzVisual" class="absolute top-0 bottom-0 bg-red-200/50 z-0 transition-all" style="left: 45%; width: 10%;"></div>
+                        
+                        <!-- Output Bar -->
+                        <div id="outputBar" class="absolute top-0 bottom-0 bg-emerald-500 transition-all z-20" style="left: 50%; width: 0%;"></div>
+                    </div>
+                    <div class="mt-2 font-bold text-slate-800 text-lg">
+                        Game Sees: <span id="gameOutput" class="text-emerald-600">0°</span>
+                    </div>
+                </div>
+
+                <div class="mt-6 text-left text-sm bg-blue-50 p-4 rounded text-blue-900 border border-blue-200">
+                    <i class="fas fa-lightbulb mr-2"></i><strong>Code Implementation:</strong>
+                    <code class="block mt-2 bg-white p-2 rounded text-xs border border-blue-100">
+                        if (abs(angle) &lt; DEADZONE) { <br>
+                        &nbsp;&nbsp;angle = 0; <br>
+                        }
+                    </code>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        // ==========================================
+        // 1. Single Page Routing Logic
+        // ==========================================
+        const pages = ['overview', 'hardware', 'physics', 'software', 'calibration'];
+        let liveSimulationActive = false;
+
+        function nav(targetPage) {
+            // Update active section
+            pages.forEach(page => {
+                const el = document.getElementById(`view-${page}`);
+                if (page === targetPage) {
+                    el.classList.add('active');
+                } else {
+                    el.classList.remove('active');
+                }
+            });
+
+            // Update Nav Button Styles
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                if (btn.getAttribute('data-target') === targetPage) {
+                    btn.classList.replace('text-indigo-200', 'bg-indigo-800');
+                    btn.classList.replace('hover:bg-indigo-700', 'text-white');
+                } else {
+                    btn.classList.replace('bg-indigo-800', 'text-indigo-200');
+                    btn.classList.add('hover:bg-indigo-700');
+                }
+            });
+
+            // Handle Simulation Lifecycle
+            if (targetPage === 'physics') {
+                liveSimulationActive = true;
+                if (!chartInitialized) initChart();
+            } else {
+                liveSimulationActive = false;
+            }
+        }
+
+        // ==========================================
+        // 2. Hardware Wiring Interaction
+        // ==========================================
+        const pinInfo = {
+            'power': '<strong class="text-red-600">Power (3.3V):</strong> The ESP32 provides a regulated 3.3V output. Connect this to the VCC pin of the MPU6050 to power the sensor.',
+            'gnd': '<strong>Ground:</strong> Completes the electrical circuit. Connect ESP32 GND to MPU6050 GND.',
+            'sda': '<strong class="text-blue-600">SDA (Data):</strong> Serial Data Line for I2C communication. Data flows both ways between the microcontroller and sensor here.',
+            'scl': '<strong class="text-green-600">SCL (Clock):</strong> Serial Clock Line. The ESP32 pulses this pin to keep the data transmission synchronized.',
+            'default': '<span class="text-slate-500 italic">Hover over a connection in the table above to see details.</span>'
+        };
+
+        function showPinInfo(pinKey) {
+            document.getElementById('pin-info-box').innerHTML = pinInfo[pinKey];
+        }
+
+        // ==========================================
+        // 3. Physics Simulation (Wheel & Chart)
+        // ==========================================
+        let wheelCanvas, ctx;
+        let myChart, chartInitialized = false;
+        
+        // Physics state
+        let currentWheelAngle = 0; // The true physical angle (set by slider)
+        let filteredAngle = 0;     // The simulated ESP32 calculated angle
+        let simulatedGyroDrift = 0;
+        let lastTime = Date.now();
+        
+        // Data Buffers for Chart (100 data points)
+        const bufferSize = 100;
+        let timeLabels = Array(bufferSize).fill('');
+        let accelData = Array(bufferSize).fill(0);
+        let gyroData = Array(bufferSize).fill(0);
+        let filterData = Array(bufferSize).fill(0);
+
+        // Initialize Wheel Drawing
+        function drawWheel(angle) {
+            if(!ctx) return;
+            ctx.clearRect(0, 0, 192, 192);
+            ctx.save();
+            ctx.translate(96, 96);
+            ctx.rotate(angle * Math.PI / 180);
+            
+            // Draw Outer Rim
+            ctx.beginPath();
+            ctx.arc(0, 0, 85, 0, 2 * Math.PI);
+            ctx.lineWidth = 14;
+            ctx.strokeStyle = '#1e293b'; // slate-800
+            ctx.stroke();
+
+            // Draw Spokes
+            ctx.beginPath();
+            ctx.moveTo(0, 0); ctx.lineTo(0, 85); // Bottom spoke
+            ctx.moveTo(0, 0); ctx.lineTo(-75, -40); // Left spoke
+            ctx.moveTo(0, 0); ctx.lineTo(75, -40); // Right spoke
+            ctx.lineWidth = 12;
+            ctx.strokeStyle = '#334155'; // slate-700
+            ctx.stroke();
+
+            // Draw Center Hub
+            ctx.beginPath();
+            ctx.arc(0, 0, 25, 0, 2 * Math.PI);
+            ctx.fillStyle = '#4f46e5'; // indigo-600
+            ctx.fill();
+            
+            ctx.restore();
+        }
+
+        // Initialize Chart.js
+        function initChart() {
+            const chartCtx = document.getElementById('liveChart').getContext('2d');
+            myChart = new Chart(chartCtx, {
+                type: 'line',
+                data: {
+                    labels: timeLabels,
+                    datasets: [
+                        { label: 'Accel', data: accelData, borderColor: '#ef4444', borderWidth: 1, pointRadius: 0, tension: 0.1, borderDash: [5, 5] },
+                        { label: 'Gyro', data: gyroData, borderColor: '#3b82f6', borderWidth: 1, pointRadius: 0, tension: 0.1 },
+                        { label: 'Filtered', data: filterData, borderColor: '#10b981', borderWidth: 3, pointRadius: 0, tension: 0.1 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // Turn off for real-time performance
+                    scales: {
+                        y: { min: -100, max: 100, title: { display: true, text: 'Angle (Degrees)' } },
+                        x: { display: false }
+                    },
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                }
+            });
+            chartInitialized = true;
+        }
+
+        // The Main Physics Loop (runs ~30fps)
+        setInterval(() => {
+            if (!liveSimulationActive) return;
+
+            // 1. Get Input
+            const slider = document.getElementById('wheelInput');
+            currentWheelAngle = parseFloat(slider.value);
+            document.getElementById('wheelAngleDisplay').innerText = `${currentWheelAngle.toFixed(0)}°`;
+            
+            // Draw Wheel
+            if(!ctx) {
+                wheelCanvas = document.getElementById('wheelCanvas');
+                ctx = wheelCanvas.getContext('2d');
+            }
+            drawWheel(currentWheelAngle);
+
+            // 2. Physics / Sensor Simulation
+            let now = Date.now();
+            let dt = (now - lastTime) / 1000.0;
+            if(dt > 0.1) dt = 0.03; // prevent spikes if tab inactive
+            lastTime = now;
+
+            // Simulate Noisy Accelerometer (True angle + high frequency noise)
+            let accelJitter = (Math.random() - 0.5) * 15; // +/- 7.5 deg noise
+            let rawAccel = currentWheelAngle + accelJitter;
+
+            // Simulate Gyroscope (Calculated rate + drift over time)
+            // We estimate rate by comparing to previous filtered state
+            let trueRate = (currentWheelAngle - filteredAngle) / dt; 
+            simulatedGyroDrift += (Math.random() - 0.45) * 0.1; // Accumulate drift
+            let rawGyroRate = trueRate + simulatedGyroDrift;
+
+            // 3. The Filter!
+            let alpha = parseFloat(document.getElementById('alphaInput').value);
+            document.getElementById('alphaDisplay').innerText = alpha.toFixed(2);
+            
+            filteredAngle = alpha * (filteredAngle + rawGyroRate * dt) + (1 - alpha) * rawAccel;
+
+            // 4. Update Data Buffers
+            accelData.push(rawAccel);
+            gyroData.push(filteredAngle + simulatedGyroDrift * 2); // Visual representation of drifted integration
+            filterData.push(filteredAngle);
+
+            accelData.shift();
+            gyroData.shift();
+            filterData.shift();
+
+            if (myChart) myChart.update();
+
+        }, 33); // ~30 FPS
+
+        // ==========================================
+        // 4. Calibration Simulator Logic
+        // ==========================================
+        const dzInput = document.getElementById('deadzoneInput');
+        const calibInput = document.getElementById('calibWheelInput');
+        const dzVisual = document.getElementById('dzVisual');
+        const outputBar = document.getElementById('outputBar');
+        const gameOutputTxt = document.getElementById('gameOutput');
+
+        function updateCalibration() {
+            let dz = parseInt(dzInput.value);
+            let input = parseInt(calibInput.value);
+            
+            document.getElementById('dzVal').innerText = `±${dz}°`;
+            document.getElementById('calibWheelVal').innerText = `${input}°`;
+
+            // Update Deadzone Visual Box (Map 0-90 to percentage of width)
+            // Full width is 180 degrees (-90 to 90).
+            let dzPercent = (dz / 180) * 100 * 2; // *2 because it's +/-
+            dzVisual.style.width = `${dzPercent}%`;
+            dzVisual.style.left = `${50 - (dzPercent/2)}%`;
+
+            // Calculate output based on deadzone
+            let output = 0;
+            if (Math.abs(input) > dz) {
+                // If beyond deadzone, calculate mapped value. 
+                // Advanced drivers map the edge of the deadzone to 0 to prevent a sudden "jump".
+                if (input > 0) {
+                    output = input - dz;
+                } else {
+                    output = input + dz;
+                }
+            }
+
+            // Update Output Bar
+            gameOutputTxt.innerText = `${output}°`;
+            if (output === 0) {
+                outputBar.style.width = '0%';
+                outputBar.style.left = '50%';
+                gameOutputTxt.className = "text-slate-400";
+            } else if (output > 0) {
+                // Map remaining angle (90-dz) to 50% width
+                let width = (output / (90 - dz)) * 50;
+                outputBar.style.width = `${width}%`;
+                outputBar.style.left = '50%';
+                gameOutputTxt.className = "text-emerald-600";
+            } else {
+                let width = (Math.abs(output) / (90 - dz)) * 50;
+                outputBar.style.width = `${width}%`;
+                outputBar.style.left = `${50 - width}%`;
+                gameOutputTxt.className = "text-emerald-600";
+            }
+        }
+
+        dzInput.addEventListener('input', updateCalibration);
+        calibInput.addEventListener('input', updateCalibration);
+
+
+        // ==========================================
+        // Utility Functions
+        // ==========================================
+        function copyCode() {
+            const code = document.querySelector('code').innerText;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = document.querySelector('.fa-copy').parentElement;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check mr-1 text-emerald-400"></i> Copied!';
+                setTimeout(() => { btn.innerHTML = originalText; }, 2000);
+            });
+        }
+
+        // Initial setup
+        window.addEventListener('load', () => {
+            // Setup canvas
+            wheelCanvas = document.getElementById('wheelCanvas');
+            ctx = wheelCanvas.getContext('2d');
+            drawWheel(0);
+            updateCalibration();
+        });
+
+    </script>
+</body>
+</html>
